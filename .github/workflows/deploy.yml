@@ -1,0 +1,63 @@
+name: Deploy Innovatech Web
+
+on:
+  push:
+    branches:
+      - [cite_start]deploy # Trigger correcto según IE3 [cite: 335]
+
+jobs:
+  build-and-push:
+    name: Build and Push to ECR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v3
+
+      - name: Configurar credenciales de AWS
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Login a Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, Tag, and Push a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: innovatech-web
+          IMAGE_TAG: latest
+        run: |
+          # Construcción optimizada
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./frontend
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # 1. Login en ECR dentro de la instancia
+            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 774077826395.dkr.ecr.us-east-1.amazonaws.com
+            
+            # 2. Detener y limpiar contenedor previo (IE4) [cite: 338]
+            docker rm -f contenedor-web || true
+            
+            # 3. Eliminar imagen antigua para evitar falta de espacio
+            docker rmi 774077826395.dkr.ecr.us-east-1.amazonaws.com/innovatech-web:latest || true
+            
+            # 4. Descargar imagen nueva
+            docker pull 774077826395.dkr.ecr.us-east-1.amazonaws.com/innovatech-web:latest
+            
+            # 5. Ejecutar con conexión al backend (IE7) 
+            docker run -d --name contenedor-web -p 80:80 --add-host innovatech-backend:100.54.242.203 774077826395.dkr.ecr.us-east-1.amazonaws.com/innovatech-web:latest
